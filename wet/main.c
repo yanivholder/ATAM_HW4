@@ -52,6 +52,10 @@ void debug(void* addr, char* flag, char* output_file_name, pid_t program_pid,
 
     int wait_status;
     struct user_regs_struct regs;
+	struct user_regs_struct old_regs;
+	FILE* fp;
+    fp = fopen(output_file_name, (char*)'w');
+    int fd = fileno(fp);
     long data = ptrace(PTRACE_PEEKTEXT, program_pid, (void *) addr, NULL);
     //write int 3 to the address
     unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
@@ -123,11 +127,20 @@ void debug(void* addr, char* flag, char* output_file_name, pid_t program_pid,
                 }
                 //if we got here that means we are right before a sys write!!!
 
-                /*
-                 *
-                 * holder code - when we reach sys write, this is what happens
-                 *
-                 */
+                ptrace(PTRACE_GETREGS, program_pid, 0, &regs);
+				ptrace(PTRACE_GETREGS, program_pid, 0, &old_regs);
+				regs.rdi = fd;
+				regs.rip -= 1;
+				ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+				if (strcmp(flag, (char*)'c') == 0) {
+					ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+					wait(&wait_status);
+					old_regs.rip -= 1;
+					ptrace(PTRACE_SETREGS, program_pid, 0, &old_regs);
+					ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+				}
+				ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+				wait(&wait_status);
             }
         }
     }
