@@ -1,3 +1,8 @@
 wet/.idea/
 wet/cmake-build-debug
 wet/*.o
+wet/small_prf
+wet/prf
+wet/debugee
+wet/myout.txt
+wet/small_debuger
