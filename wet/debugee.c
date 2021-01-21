@@ -4,11 +4,11 @@
 #include <stdio.h>
 
 void printer(){
-    puts("test_new");
+    puts("this is the text from the selcted func");
 }
 
 int main(){
-    puts("test_new");
+    printer();
     return 0;
 }
 

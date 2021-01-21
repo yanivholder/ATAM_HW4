@@ -14,9 +14,8 @@
 
 
 pid_t run_target(const char* program_name) {
-    pid_t pid;
 
-    pid = fork();
+    pid_t pid = fork();
     if (pid > 0) {
         return pid;
     } else if (pid == 0) {
@@ -33,52 +32,78 @@ pid_t run_target(const char* program_name) {
 }
 
 
-void debug(void* addr, char* flag, const char* output_file_name, pid_t program_pid,
+void debug(void* char_addr, char* flag, const char* output_file_name, pid_t program_pid,
             char* program_name, int program_argc, char** program_argv){
 
     int wait_status;
+    wait(&wait_status);
     struct user_regs_struct regs;
 	struct user_regs_struct old_regs;
 	FILE* fp = fopen(output_file_name, "w");
+	unsigned long addr = (unsigned long)strtol(char_addr, NULL, 16);
 
     int fd = fileno(fp);
-    long data = ptrace(PTRACE_PEEKTEXT, program_pid, (void *) addr, NULL);
+    unsigned long data = ptrace(PTRACE_PEEKTEXT, program_pid, (void *) addr, NULL);
     //write int 3 to the address
-    unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+//    unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+    unsigned long data_trap = (data & 0xFFFFFF00) | 0xCC; //this is a 32 bit system!
+
     ptrace(PTRACE_POKETEXT, program_pid, (void *) (addr), (void *) (data_trap));
 
-    long return_data;
+    unsigned long return_data;
     unsigned long return_data_trap;
+    printf("func address in char is %s\n", char_addr);
+    printf("func address in int is 0x%llx\n", addr);
+
 
     while (1){ //debugged program has not exited, iterating breakpints
         //let the child run with the breakpoint and wait for it to reach it
         puts("reached first while");
-        ptrace(PTRACE_CONT, program_pid, NULL, NULL);
-        wait(&wait_status);
-        //reached breakpoint
-        //check if the program did not stop because of the breakpoint but for a different reason
+
+        long res = ptrace(PTRACE_CONT, program_pid, NULL, NULL);
+        if(res < 0){
+            puts("ptrace did not get to the breakpoint");
+            perror("ptrace");
+            return;
+        }
+//----------------tets code------
+//        wait(&wait_status);
+//        while (WIFSTOPPED(wait_status) && regs.rip != addr){
+//            ptrace(PTRACE_SINGLESTEP, program_pid, NULL, NULL);
+//            wait(&wait_status);
+//            ptrace(PTRACE_GETREGS, program_pid, 0, &regs);
+//
+//            printf("curr address is 0x%llx\n", regs.rip);
+//
+//        }
+//--------------------------------
+        // reached breakpoint
+        // check if the program did not stop because of the breakpoint but for a different reason
         if(!WIFSTOPPED(wait_status)){
-            puts("first while stopped and not because of breakpoint");
+            puts("WIFSTOPPED poped me out");
             break;
         }
         puts("on beginning of func");
-
+        ptrace(PTRACE_GETREGS, program_pid, 0, &regs);
+        printf("rip is 0x%llx\n", regs.rip);
 
         //remove the breakpoint by restoring the previous data
-        ptrace(PTRACE_GETREGS, program_pid, 0, &regs);
         ptrace(PTRACE_POKETEXT, program_pid, (void *) addr, (void *) data);
         regs.rip -= 1;
         ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
 
         //perform single step in order to place the brake point back on the command we fixed
         if (ptrace(PTRACE_SINGLESTEP, program_pid, NULL, NULL) < 0){
+            puts("failed at single step");
             perror("ptrace");
             return;
         }
+//        ptrace(PTRACE_SINGLESTEP, program_pid, NULL, NULL);
         wait(&wait_status);
-        if(!WIFSTOPPED(wait_status)){
-            break;
-        }
+//        if(!WIFSTOPPED(wait_status)){
+//            puts("WIFSTOPPED poped me out");
+//            break;
+//        }
         //write int 3 to the address
         //no need to use rip-1 because it's a fixed (constant) address - only one breakpoint per program
         //data_trap is set because there's only one, no need to calc again
@@ -101,51 +126,51 @@ void debug(void* addr, char* flag, const char* output_file_name, pid_t program_p
             wait(&wait_status);
             ptrace(PTRACE_GETREGS, program_pid, 0, &regs);
 
-            if (WIFSTOPPED(wait_status)){ //the program stopped because of int3 trap and not syscall
-                //case - recursive call (rip == data)
-                    //TODO - find out if this could happen and if so, implement
-                if (regs.rip == return_data)
-                    //we've reached the func's return, this call is over.
-                    //remove breakpoint from return address
-                    ptrace(PTRACE_POKETEXT, program_pid, (void *) regs.rip, (void *) return_data);
-                    regs.rip -= 1;
-                    ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
-                    puts("returning from func");
-                    break;
-            }else {
-                //if we got here, that means we are right before a syscall
-                if (regs.rax != 1) { //not sys write
-                    //perform the syscall
-                    ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-                    wait(&wait_status);
-                    //we are after the irrelevant syscall
-                    puts("reached syscall in func that is not sys write");
-                    continue; //search next syscall in func
-                }
-                //if we got here that means we are right before a sys write!!!
-
-				ptrace(PTRACE_GETREGS, program_pid, 0, &old_regs);
-				regs.rdi = fd;
-				ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
-                puts("reached holder-code");
-                
-//                if (strcmp(flag, (char*)'c') == 0) {
-//				    //before writing at all, right before writing to file
-//					ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-//					wait(&wait_status);
-//					//right after write to file
-//					//setting params for syswrite to screen with old regs
-//					ptrace(PTRACE_SETREGS, program_pid, 0, &old_regs);
-//					ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-//                    wait(&wait_status);
-//                    //right before write to screen
-//                }
-//				ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-//				wait(&wait_status);
-//				fprintf(fp, "out test"); //TODO remove
-//				//right after syswrite to screen
-
+            if (WIFSTOPPED(wait_status) && regs.rip == return_data){ //the program stopped because of int3 trap and not syscall
+                //we've reached the func's return, this call is over.
+                //remove breakpoint from return address
+                ptrace(PTRACE_POKETEXT, program_pid, (void *) regs.rip, (void *) return_data);
+                regs.rip -= 1;
+                ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+                puts("returning from func");
+                break;
             }
+            //if we got here, that means we are right before a syscall
+            if (regs.orig_rax != 1) { //not sys write TODO - check if we need orig or not
+                //perform the syscall
+                ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+                wait(&wait_status);
+                //we are after the irrelevant syscall
+                puts("reached syscall in func that is not sys write");
+                continue; //search next syscall in func
+            }
+            //if we got here that means we are right before a sys write!!!
+
+
+            puts("reached holder-code");
+            printf("rax is %lld (supposed to be 1)\n", regs.rax);
+            printf("the string to print is %s and it's length is %lld", regs.rsi, regs.rdx);
+            ptrace(PTRACE_CONT, program_pid, NULL, NULL);
+//            ptrace(PTRACE_GETREGS, program_pid, 0, &old_regs);
+//            regs.rdi = fd;
+//            ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+//            if (strcmp(flag, (char*)'c') == 0) {
+//                //before writing at all, right before writing to file
+//                ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+//                wait(&wait_status);
+//                //right after write to file
+//                //setting params for syswrite to screen with old regs
+//                ptrace(PTRACE_SETREGS, program_pid, 0, &old_regs);
+//                ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+//                wait(&wait_status);
+//                //right before write to screen
+//            }
+//            ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
+//            wait(&wait_status);
+//            fprintf(fp, "out test"); //TODO remove
+//            //right after syswrite to screen
+
+
         }
     }
     fclose(fp);
@@ -164,11 +189,10 @@ void debug(void* addr, char* flag, const char* output_file_name, pid_t program_p
 int main(int argc, char** argv) {
     // Read arguments
     char* addr = argv[1];
-//    char* addr = (char*)malloc(sizeof(char)*strlen(argv[1]));
-//    strcpy(addr, argv[1]);
     char* flag = argv[2];
     char* output_file_name = argv[3];
-    char* program_name = argv[4];
+//    char* program_name = argv[4]; //TODO - fix this
+    char* program_name = "/home/student/Desktop/ATAM_HW4/wet/debugee";
 
     pid_t program_pid;
 
