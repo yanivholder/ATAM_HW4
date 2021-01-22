@@ -93,12 +93,26 @@ unsigned long peek_text(pid_t program_pid, unsigned long addr){
     return data;
 }
 
-void restore_command_that_had_breakpoint_on_it(pid_t program_pid, struct user_regs_struct* regs,
-                                               unsigned long addr, unsigned long data){
+unsigned long peek_data(pid_t program_pid, unsigned long addr){
+    unsigned long data = ptrace(PTRACE_PEEKDATA, program_pid, (void *) addr, NULL);
+    if (data < 0){
+        perror("ptrace poke text");
+        exit(1);
+    }
+    return data;
+}
+
+// this func restores command, executes it and then restores the breakpoint
+void breakpoint_handler(int* wait_status, pid_t program_pid, struct user_regs_struct* regs,
+                        unsigned long addr, unsigned long data){
+
+    unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     get_regs(program_pid, regs);
     poke_text(program_pid, addr, data);
     regs->rip -= 1;
     ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+    p_trace_single_step_and_wait(wait_status, program_pid); //perform single step in order to place the brake point back on the command we fixed
+    poke_text(program_pid, addr, data_trap);
 }
 
 
@@ -142,7 +156,6 @@ void debug(unsigned long addr, bool is_the_flag_c, pid_t program_pid, int fd){
 
     //write int 3 to the address
     if(!WIFSTOPPED(wait_status)){
-        puts("problem before loop");
         return;
     }
 
@@ -153,10 +166,10 @@ void debug(unsigned long addr, bool is_the_flag_c, pid_t program_pid, int fd){
     printf("data = %lx, trap = %lx\n", data, data_trap);
 
     while (!WIFEXITED(wait_status)){
-        get_regs(program_pid, &regs);
+//        get_regs(program_pid, &regs);
 //        printf("child starting rip = %llx\n", regs.rip);
         p_trace_cont_and_wait(&wait_status, program_pid);
-        get_regs(program_pid, &regs);
+//        get_regs(program_pid, &regs);
 //        long cmnd = peek_text(program_pid, regs.rip-1);
 //        printf("child stopped at rip = %llx\n, and the command is %lx\n", regs.rip, cmnd);
 
@@ -164,48 +177,63 @@ void debug(unsigned long addr, bool is_the_flag_c, pid_t program_pid, int fd){
             puts("WIFSTOPPED breaked in start of loop");
             break;
         }
-        printf("rip = %llx\n", regs.rip);
+//        printf("rip = %llx\n", regs.rip);
 
-        restore_command_that_had_breakpoint_on_it(program_pid, &regs, addr, data);
-        p_trace_single_step_and_wait(&wait_status, program_pid); //perform single step in order to place the brake point back on the command we fixed
-        if(!WIFSTOPPED(wait_status)){
-            break;
-        }
-        //write int 3 to the address
-        ptrace(PTRACE_POKETEXT, program_pid, (void *) (addr), (void *) (data_trap));
+        breakpoint_handler(&wait_status, program_pid, &regs, addr, data);
 
-        get_regs(program_pid, &regs);
-        return_data = ptrace(PTRACE_PEEKTEXT, program_pid, (void *)(regs.rbp+8), NULL);
         //write int3 to the return address
+        get_regs(program_pid, &regs);
+        unsigned long return_address = peek_data(program_pid, regs.rsp);
+        return_data = peek_text(program_pid, return_address);
         return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-        ptrace(PTRACE_POKETEXT, program_pid, (void *)(regs.rbp+8), (void *) (return_data_trap));
+        poke_text(program_pid, regs.rsp, return_data_trap);
 
-        while(1){ //find syscalls within the func
+        while (true)
+        {
             p_trace_syscall_and_wait(&wait_status, program_pid);
-            get_regs(program_pid, &regs);
 
-            if (WIFSTOPPED(wait_status)){ //the program stopped because of int3 trap and not syscall
-                //case - recursive call (rip == data)
-                //TODO - find out if this could happen and if so, implement
-                if (regs.rip == return_data) {
-                    //we've reached the func's return, this call is over.
-                    //remove breakpoint from return address
-                    ptrace(PTRACE_POKETEXT, program_pid, (void *) regs.rip, (void *) return_data);
-                    regs.rip -= 1;
-                    ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
-                    break;
-                }
-            }
-            if (regs.rax != 1) { //not sys write
-                p_trace_syscall_and_wait(&wait_status, program_pid);
-                continue; //search next syscall in func
-            }
             get_regs(program_pid, &regs);
-            regs.rdi = fd;
-            ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
-            puts("before holder func");
-//            holder_func(&wait_status, is_the_flag_c, program_pid, &old_regs);
+            if(regs.rip == return_address+1){
+                removeBreakPoint(ret_addr,child_pid,ret_data);
+                return;
+            }
+
+            if ((regs.orig_rax == 1) && (regs.rdi == 1))
+            {
+                holder_func(&wait_status, is_the_flag_c, fd, program_pid, &regs);
+            }
+            else
+            {
+                p_trace_syscall_and_wait(&wait_status, program_pid);
+            }
         }
+
+//        while(1){ //find syscalls within the func
+//            p_trace_syscall_and_wait(&wait_status, program_pid);
+//            get_regs(program_pid, &regs);
+//
+//            if (WIFSTOPPED(wait_status)){ //the program stopped because of int3 trap and not syscall
+//                //case - recursive call (rip == data)
+//                //TODO - find out if this could happen and if so, implement
+//                if (regs.rip == return_data) {
+//                    //we've reached the func's return, this call is over.
+//                    //remove breakpoint from return address
+//                    ptrace(PTRACE_POKETEXT, program_pid, (void *) regs.rip, (void *) return_data);
+//                    regs.rip -= 1;
+//                    ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+//                    break;
+//                }
+//            }
+//            if (regs.rax != 1) { //not sys write
+//                p_trace_syscall_and_wait(&wait_status, program_pid);
+//                continue; //search next syscall in func
+//            }
+//            get_regs(program_pid, &regs);
+//            regs.rdi = fd;
+//            ptrace(PTRACE_SETREGS, program_pid, 0, &regs);
+//            puts("before holder func");
+////            holder_func(&wait_status, is_the_flag_c, program_pid, &old_regs);
+//        }
     }
     if (WIFEXITED(wait_status)) {
         return; //means child exited by exit()
