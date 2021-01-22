@@ -13,11 +13,12 @@
 #include <syscall.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
+#include <stdbool.h>
 
 
 
 
-pid_t run_target(const char* program_name) {
+pid_t run_target(char** argv) {
     pid_t pid;
 
     pid = fork();
@@ -28,7 +29,10 @@ pid_t run_target(const char* program_name) {
             perror("ptrace (trace me)");
             exit(1);
         }
-        execl(program_name, program_name, NULL); // Why two times programe_name??
+        if (execv(argv[0], argv)) {
+            perror("execv");
+            exit(1);
+        }
     } else {
         // fork error
         perror("fork");
@@ -75,25 +79,43 @@ void get_regs(pid_t program_pid, struct user_regs_struct* regs){
     }
 }
 
-void holder_func(int* wait_status, char* flag, pid_t program_pid, struct user_regs_struct* old_regs){
-    if (*flag == 'c') {
-        //before writing at all, right before writing to file
-        ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-        wait(wait_status);
-        //right after write to file
-        //setting params for syswrite to screen with old regs
-        ptrace(PTRACE_SETREGS, program_pid, 0, old_regs);
-        ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-        wait(wait_status);
-        //right before write to screen
+void set_regs(pid_t program_pid, struct user_regs_struct* regs){
+    if (ptrace(PTRACE_SETREGS, program_pid, 0, regs) < 0){
+        perror("ptrace set regs");
+        exit(1);
     }
-    ptrace(PTRACE_SYSCALL, program_pid, NULL, NULL);
-    wait(wait_status);
-    //right after syswrite to screen
 }
 
-void debug(unsigned long addr, char* flag, const char* output_file_name, pid_t program_pid,
-           char* program_name, int program_argc, char** program_argv, int fd){
+void holder_func(int* wait_status, bool copy, int fd, pid_t program_pid,
+                 struct user_regs_struct* regs) {
+
+    if(write(fd, "PRF:: ", 6) < 0) {
+        perror("write");
+        exit(1);
+    }
+    // Changing the output fd to the file
+    regs->rdi = fd;
+    set_regs(program_pid, regs);
+    // Make the actual writing to file
+    p_trace_syscall_and_wait(wait_status, program_pid);
+
+    // If the program should also print to the screen
+    if (copy) {
+        // Getting back to the stage before the current func
+        get_regs(program_pid, regs);
+        regs->rip -= 2;
+        regs->rdi = 1;
+        regs->rax = 1;
+        set_regs(program_pid, regs);
+        // First, entering the kernel for the write syscall
+        p_trace_syscall_and_wait(wait_status, program_pid);
+        // Now actually writing
+        p_trace_syscall_and_wait(wait_status, program_pid);
+    }
+    get_regs(program_pid, regs);
+}
+
+void debug(unsigned long addr, char* flag, pid_t program_pid, int fd){
 
     int wait_status;
     wait(&wait_status);
@@ -172,23 +194,23 @@ void debug(unsigned long addr, char* flag, const char* output_file_name, pid_t p
 int main(int argc, char** argv) {
     // Read arguments
     unsigned long addr = strtoul(argv[1], NULL, 16);
-//    char* addr = (char*)malloc(sizeof(char)*strlen(argv[1]));
-//    strcpy(addr, argv[1]);
     char* flag = argv[2];
     char* output_file_name = argv[3];
-    char* program_name = argv[4];
 
     pid_t program_pid;
 
-    int fd = open(output_file_name, O_CREAT|O_WRONLY|O_APPEND | O_TRUNC);
+    int fd = open(output_file_name, O_CREAT|O_WRONLY|O_TRUNC, 0644);
     if (fd < 0){
         perror("open");
         exit(1);
     }
 
-    program_pid = run_target(program_name);
-    debug(addr, flag, output_file_name, program_pid, program_name, argc-4, argv+4, fd); // TODO add all arguments
+    program_pid = run_target(argv + 4);
+    debug(addr, flag, program_pid, fd);
 
-    close(fd);
+    if (close(fd) < 0) {
+        perror("close");
+        exit(1);
+    }
     return 0;
 }
