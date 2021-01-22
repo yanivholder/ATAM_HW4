@@ -29,7 +29,7 @@ pid_t run_target(char** argv) {
             perror("ptrace (trace me)");
             exit(1);
         }
-        if (execv(argv[0], argv)) {
+        if (execv(argv[0], argv) < 0) {
             perror("execv");
             exit(1);
         }
