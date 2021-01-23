@@ -1,36 +1,50 @@
 .section .data
-msg: .ascii "print me to file and maybe also to screen\n"
+msg: .ascii "hello intel x64\n"
 msg_len: .quad msg_len - msg
-msg2: .ascii "only print to screen\n"
+
+msg2: .ascii "goodbye intel x64\n"
 msg_len2: .quad msg_len2 - msg2
+
 
 .text
 .global _start
-_start:
-    movq $1, %rax
-    movq $1, %rdi
-    movq $msg2, %rsi
-    movq (msg_len2), %rdx
-    syscall
-
-	call foo
-
-	xor %rax, %rax
-	addq %rax, %rax
-	movq $1, %rax
-    movq $1, %rdi
-    movq $msg2, %rsi
-    movq (msg_len2), %rdx
-    syscall
-
-    movq $60, %rax
-    movq $0, %rdi
-    syscall
 
 foo:
-	movq $1, %rax
-    movq $1, %rdi
-    movq $msg, %rsi
-    movq (msg_len), %rdx
+    cmp $0,%r8
+    je end
+    mov $0x1, %rax
+    mov $0x1, %rdi
+    mov $msg, %rsi
+    mov (msg_len), %rdx
+
     syscall
-	ret
+    dec %r8
+    call foo
+end:    
+    retq
+
+
+fee:
+    mov $0x1, %rax
+    mov $0x1, %rdi
+    mov $msg2, %rsi
+    mov (msg_len2), %rdx
+    syscall
+    ret
+
+_start:
+    mov $4, %r8
+    callq foo
+    mov $4, %r8
+    callq foo
+    mov $4, %r8
+    callq foo
+    xor %rax, %rax
+    mov $4, %r8
+    callq foo
+
+    callq fee
+    mov $0x3c, %rax
+    mov $0x0, %rdi
+    syscall
+

@@ -151,6 +151,7 @@ void debug(pid_t program_pid, int fd, bool copy, unsigned long bug_func_address)
 
     struct user_regs_struct regs;
     unsigned long return_address, return_data_coding, bug_func_coding;
+    bool debug_func_call_ongoing = true;
 
 
     while (!WIFEXITED(wait_status)) //looking for calls to the bug func
@@ -165,16 +166,17 @@ void debug(pid_t program_pid, int fd, bool copy, unsigned long bug_func_address)
 
         return_address = get_ret_address(program_pid, &regs);
         return_data_coding = set_trap_return_original_coding(return_address, program_pid);
-        while (true) // looking for syscalls in a single call to bug func
+
+        debug_func_call_ongoing = true;
+        while (debug_func_call_ongoing) // looking for syscalls in a single call to bug func
         {
             p_trace_syscall_and_wait(&wait_status, program_pid);
             get_regs(program_pid, &regs);
             if(regs.rip == return_address + 1){ //this bug func call is over
                 remove_trap_and_rewind_rip(program_pid, return_address, return_data_coding);
-                return;
+                debug_func_call_ongoing = false;
             }
-
-            if ((regs.orig_rax == 1) && (regs.rdi == 1))
+            else if ((regs.orig_rax == 1) && (regs.rdi == 1))
             {
                 holder_func(&wait_status, copy, fd, program_pid, &regs);
             }
