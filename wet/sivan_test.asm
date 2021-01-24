@@ -47,4 +47,3 @@ _start:
     mov $0x3c, %rax
     mov $0x0, %rdi
     syscall
-

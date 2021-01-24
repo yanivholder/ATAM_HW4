@@ -141,7 +141,12 @@ void holder_func(int* wait_status, bool copy, int fd, pid_t program_pid,
         p_trace_syscall_and_wait(wait_status, program_pid);
         // Now actually writing
         p_trace_syscall_and_wait(wait_status, program_pid);
+    } else {
+        // set output stream back to being screen
+        regs->rdi = 1;
+        set_regs(program_pid, regs);
     }
+
 }
 
 void debug(pid_t program_pid, int fd, bool copy, unsigned long bug_func_address)

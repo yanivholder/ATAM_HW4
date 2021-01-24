@@ -3,22 +3,46 @@
 //
 #include <stdio.h>
 
-void printer(int n){
+void f(int n);
+void g(int n);
+void h(int n);
+
+
+
+void f(int n){
 	if (n==0){
 		return;
 	}
-	printer(n-1);
-	printf("this is printer print #%d\n", n);
+	g(n-1);
+	printf("this is f print #%d\n", n);
 
 }
 
-void fake_printer(){
-	puts("only to screen from fake printer");
+void h(int n){
+	
+	if (n==0){
+		return;
+	}
+	puts("this is from h");
+	f(n);
+
+}
+
+void g(int n){
+	
+	if (n==0){
+		return;
+	}
+	f(n-1);
+	printf("this is g print #%d\n", n);
+
 }
 
 int main(){
-	fake_printer();
-    printer(3);
+	puts("this is from main 1");
+    f(5);
+    h(3);
+	puts("this is from main 2");
 	
     return 0;
 }
